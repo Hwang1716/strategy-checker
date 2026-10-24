@@ -14,7 +14,7 @@ st.set_page_config(page_title="전략 검증기", page_icon="📊", layout="wide
 MAX_CANDIDATES = 30  # 야후 요청 제한 때문에 후보 수를 묶는다
 
 
-@st.cache_data(ttl=12 * 3600, show_spinner="시세 받는 중…")
+@st.cache_data(ttl=12 * 3600, max_entries=300, show_spinner="시세 받는 중…")  # 개수 제한: 서버 메모리 보호
 def load(ticker):
     """야후 일봉(분할·배당 반영). 같은 종목은 12시간 동안 다시 받지 않는다."""
     d = yf.download(ticker, period="max", auto_adjust=True, progress=False, multi_level_index=False)
@@ -32,7 +32,7 @@ def upbit_coins():
         return [m for m in json.load(r) if m["market"].startswith("KRW-")]
 
 
-@st.cache_data(ttl=24 * 3600, show_spinner="검색 중…")
+@st.cache_data(ttl=24 * 3600, max_entries=500, show_spinner="검색 중…")
 def search(q):
     """이름·코드로 종목 찾기 → [(보여줄 이름, 야후 코드)]. 한글이면 업비트 코인 목록, 아니면 야후 검색."""
     if any("가" <= ch <= "힣" for ch in q):
