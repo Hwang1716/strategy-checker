@@ -10,7 +10,7 @@ import yfinance as yf
 
 import engine
 
-st.set_page_config(page_title="전략 검증기", page_icon="📊", layout="wide")
+st.set_page_config(page_title="전략 검증기", layout="wide")
 MAX_CANDIDATES = 30  # 야후 요청 제한 때문에 후보 수를 묶는다
 
 
@@ -126,13 +126,13 @@ def open_to_open(d):
     return (d["Open"].shift(-1) / d["Open"] - 1).iloc[:-1]
 
 
-def verdict(verdicts, target, basis):
+def verdict(verdicts, target):
     if all(verdicts.values()):
-        st.success(f"**후보**: 학습·검증 구간 모두에서 '{target}'보다 나았습니다 ({basis}). "
+        st.success(f"**후보**: 학습·검증 구간 모두에서 '{target}'보다 나았습니다. "
                    "그래도 우연일 수 있으니 다른 종목·기간에서도 확인하세요.")
     else:
         failed = ", ".join(k for k, v in verdicts.items() if not v)
-        st.error(f"**탈락**: {failed} 구간에서 '{target}'를 이기지 못했습니다 ({basis}).")
+        st.error(f"**탈락**: {failed} 구간에서 '{target}'를 이기지 못했습니다.")
     st.caption("판정 기준: 구간마다 CAGR이 비교 대상보다 높거나, 차이가 연 2%p 이내이면서 MDD(최대 낙폭)가 절반 이하. "
                "학습·검증 둘 다 통과해야 후보.")
 
@@ -169,10 +169,10 @@ def run_with(key, submitted, params):
     if submitted:
         st.session_state[key] = params
     if key not in st.session_state:
-        st.info("왼쪽에서 설정을 고른 뒤 **[검증하기]** 버튼을 누르세요.")
+        st.info("왼쪽에서 종목과 규칙을 고르고 검증하기를 누르세요.")
         st.stop()
     if st.session_state[key] != params:
-        st.caption("⚠️ 왼쪽 설정이 바뀌었습니다. 아래는 이전 설정의 결과이니 **[검증하기]**를 다시 누르세요.")
+        st.caption("왼쪽 설정이 바뀌었습니다. 아래는 이전 설정의 결과입니다. 새 설정으로 보려면 검증하기를 다시 누르세요.")
     return st.session_state[key]
 
 
@@ -223,7 +223,7 @@ def single():
         if bench_ticker != ticker and len(bench_oo.loc[a:b]):
             rows.append([pname, f"비교 기준: {bench_name}", *engine.metrics(engine.hold_returns(bench_oo, a, b, cost)), 1])
 
-    verdict(verdicts, hold_name, "실험 001 기준")
+    verdict(verdicts, hold_name)
     show_table(rows, verdicts, label)
     curves = {f"전략: {label}": ret.loc[start:end], hold_name: engine.hold_returns(oo, start, end, cost)}
     if bench_ticker != ticker:
@@ -268,10 +268,10 @@ def pp(v):
 
 def explain(periods, verdicts, lines):
     """'왜 이런 결과가 나왔나' 칸. lines(구간 이름, 시작, 끝) → 문장 목록. 원인 설명만, 투자 조언은 하지 않는다."""
-    st.subheader("🔍 왜 이런 결과가 나왔나")
+    st.subheader("왜 이런 결과가 나왔나")
     if len(set(verdicts.values())) > 1:
         ok = [k for k, v in verdicts.items() if v][0]
-        st.markdown(f"⚠️ **구간마다 결과가 다릅니다**: {ok} 구간만 통과했습니다. 시기를 타는 결과라 믿기 어렵습니다.")
+        st.markdown(f"구간마다 결과가 다릅니다. {ok} 구간만 통과했으니 시기를 탄 결과일 수 있습니다.")
     for col, (pname, (a, b)) in zip(st.columns(len(periods)), periods.items()):
         col.markdown(f"**{pname} 구간**\n" + "\n".join(f"- {s}" for s in lines(pname, a, b)))
     st.caption("숫자로 계산한 원인 설명이며, 어떤 전략을 쓰라는 권유가 아닙니다.")
@@ -346,9 +346,9 @@ def portfolio():
             rows.append([pname, "참고: 후보 균등 보유", *engine.metrics(equal.loc[a:b].pct_change().dropna()),
                          len(o.columns), ""])
 
-    verdict(verdicts, bench_label[7:], "실험 003·004 기준")
-    st.warning("**생존 편향 주의**: 후보를 '지금 아는 종목'으로 고르면, 그동안 망해서 사라진 종목은 빠지게 됩니다. "
-               "그래서 실제보다 좋게 나오기 쉽습니다. 실험 003처럼 **과거 그 시점의 목록**(예: 2010년 다우 30종목)으로 고르면 덜 속습니다.")
+    verdict(verdicts, bench_label[7:])
+    st.warning("생존 편향 주의: 후보를 '지금 아는 종목'으로 고르면, 그동안 망해서 사라진 종목은 빠지게 됩니다. "
+               "그래서 실제보다 좋게 나오기 쉽습니다. 과거 그 시점의 목록(예: 2010년 다우 30종목)으로 고르면 덜 속습니다.")
     show_table(rows, verdicts, label, extra_cols=("평균 보유 종목 수",))
     if late:
         st.caption(f"시작일에 데이터가 없던 후보 {', '.join(late)}는 상장(데이터 시작) 200거래일 뒤부터 살 수 있고, "
@@ -390,18 +390,18 @@ def portfolio():
     explain(periods, verdicts, lines)
 
 
-st.title("📊 전략 검증기")
-st.caption("유튜브·블로그에서 본 매매 규칙이 '그냥 사서 들고 있기'보다 정말 나았는지, 과거 데이터로 정직하게 비교합니다.")
+st.title("전략 검증기")
+st.markdown("유튜브나 블로그에서 본 매매 규칙을 과거 시세에 돌려 보고, 그냥 사서 들고 있었을 때와 비교합니다.")
+st.caption("투자 조언이 아닙니다. 과거에 나았던 규칙이 앞으로도 낫다는 보장은 없습니다.")
 with st.sidebar:
     view = st.radio("검증 방식", ["한 종목", "여러 종목 (후보군)"], horizontal=True)
 
-with st.container(border=True):
+with st.expander("결과를 믿기 전에 알아 둘 것"):
     st.markdown(
-        "**읽기 전에** · 투자 조언이 아닙니다. 과거에 나았다고 앞으로도 낫다는 보장은 없습니다.\n"
-        "- **생존 편향**: 지금 이름을 아는 종목은 살아남은 종목입니다. 사라진 종목에서는 같은 규칙이 크게 잃었을 수 있습니다.\n"
-        "- **과최적화**: 여러 규칙·기간을 바꿔 가며 시도하면 우연히 좋은 결과가 하나쯤은 나옵니다. "
-        "그래서 학습 구간과 검증 구간 **둘 다** 통과해야 '후보'로 봅니다.\n"
-        "- 세금·환율은 빠져 있고, 데이터는 야후 파이낸스 무료 일봉입니다(지연·오류 가능).")
+        "- 생존 편향: 지금 이름을 아는 종목은 살아남은 종목입니다. 사라진 종목에서는 같은 규칙이 크게 잃었을 수 있습니다.\n"
+        "- 과최적화: 규칙과 기간을 바꿔 가며 여러 번 시도하면 우연히 좋은 결과가 하나쯤 나옵니다. "
+        "그래서 학습 구간과 검증 구간을 둘 다 통과해야 후보로 봅니다.\n"
+        "- 세금과 환율은 빠져 있습니다. 데이터는 야후 파이낸스 무료 일봉이라 늦거나 틀릴 수 있습니다.")
 
 if view == "한 종목":
     single()

@@ -1,0 +1,14 @@
+# 화면 테마 (증권사 앱처럼 차분): 잉크색 남색, 종이 같은 회백색, 작은 모서리
+[theme]
+base = "light"
+primaryColor = "#1F3A5F"
+backgroundColor = "#F6F7F9"
+secondaryBackgroundColor = "#E9EDF2"
+textColor = "#1B2430"
+borderColor = "#D3DAE3"
+showWidgetBorder = true
+font = "IBM Plex Sans KR:https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap"
+baseRadius = "0.25rem"
+buttonRadius = "0.25rem"
+dataframeHeaderBackgroundColor = "#E1E6ED"
+chartCategoricalColors = ["#1F3A5F", "#9AA5B4", "#B5523B"]
