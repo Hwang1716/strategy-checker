@@ -112,3 +112,25 @@ def test_matches_experiment_004(mode, weekly, period, expected, n_buys):
     a, b = period
     assert np.allclose(engine.metrics(eq.loc[a:b].pct_change().dropna()), expected, atol=0.0006)
     assert buys.loc[a:b].sum() == n_buys
+
+
+@pytest.mark.parametrize("rules", [["200일선"], ["MACD"], ["RSI", "볼린저", "OBV(임의)"]])
+def test_diagnose_adds_up(rules):
+    """비용 0일 때: (보유한 날 수익) × (안 보유한 날 수익) = 그냥 들고 있기 (비용 0)."""
+    d = fake_prices()
+    a, b = d.index[220], d.index[700]
+    x = engine.diagnose(d, rules, "다수결", 0.003, a, b)
+    _, entries, oo = engine.strategy_returns(d, rules, "다수결", 0.0)
+    gross = engine.metrics(engine.strategy_returns(d, rules, "다수결", 0.0)[0].loc[a:b])[0]
+    hold = engine.metrics(oo.loc[a:b])[0]
+    assert np.isclose((1 + gross) * (1 + x["out_move"]), 1 + hold)
+    assert x["cagr0"] >= engine.metrics(engine.strategy_returns(d, rules, "다수결", 0.003)[0].loc[a:b])[1]
+    # 구간 첫날부터 들고 있던 매매 1건을 빼면 매매 수 = 매수 횟수
+    assert x["trades"] - entries.loc[a:b].sum() in (0, 1)
+
+
+def test_diagnose_breakout():
+    d = fake_prices()
+    x = engine.diagnose(d, [engine.VB], "다수결", 0.001, d.index[10], d.index[500])
+    _, entries, _ = engine.strategy_returns(d, [engine.VB], "다수결", 0.001)
+    assert x["trades"] == entries.loc[d.index[10]:d.index[500]].sum() and 0 <= x["losing"] <= 1

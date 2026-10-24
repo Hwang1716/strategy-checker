@@ -78,6 +78,34 @@ def strategy_returns(d, rules, mode, cost):
     return ret.iloc[:-1], entries.iloc[:-1], oo.iloc[:-1]  # 마지막 날은 내일 시가가 없음
 
 
+def diagnose(d, rules, mode, cost, a, b):
+    """결과의 원인을 설명할 숫자들 (구간 a~b).
+
+    - cagr0: 비용이 0이었다면의 CAGR → 비용 영향
+    - held: 보유한 날 비율, out_move: 보유하지 않은 날들의 종목 수익을 이어 붙인 값 (+면 놓친 상승, −면 피한 하락)
+    - trades/losing/avg_days: 매매(사서 팔 때까지) 수, 손해 본 매매 비율, 평균 보유 일수
+    """
+    ret, entries, oo = strategy_returns(d, rules, mode, cost)
+    ret0 = strategy_returns(d, rules, mode, 0.0)[0]
+    if VB in rules:
+        held = entries.astype(bool)  # 하루짜리 매매: 산 날이 곧 보유한 날
+    else:
+        held = want(d, rules, mode).shift(1, fill_value=False).iloc[:-1]
+    r, h, o = ret.loc[a:b], held.loc[a:b], oo.loc[a:b]
+    run = (h != h.shift(fill_value=False)).cumsum()[h]  # 연속 보유 구간마다 번호 = 매매 하나
+    if VB in rules:
+        run[:] = np.arange(len(run))  # 변동성돌파는 이어진 날이어도 매일 따로 사고판다
+    trade_ret = (1 + r[h]).groupby(run).prod() - 1
+    return dict(
+        cagr0=metrics(ret0.loc[a:b])[1],
+        held=h.mean(),
+        out_move=(1 + o[~h]).prod() - 1,
+        trades=len(trade_ret),
+        losing=(trade_ret < 0).mean() if len(trade_ret) else 0.0,
+        avg_days=h.sum() / len(trade_ret) if len(trade_ret) else 0.0,
+    )
+
+
 def hold_returns(oo, start, end, cost):
     """그냥 들고 있기: 구간 첫 시가에 사서 끝까지 (매수 비용 1회)."""
     r = oo.loc[start:end].copy()

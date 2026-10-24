@@ -159,18 +159,36 @@ def show_chart(curves, split):
     st.plotly_chart(fig)
 
 
+def mode_radio():
+    return st.radio("조합 방식 (지표 2개 이상일 때)", ["다수결", "전부"], horizontal=True,
+                    help="다수결: 고른 지표의 과반수가 '보유'면 보유 / 전부: 모두 '보유'일 때만 보유")
+
+
+def run_with(key, submitted, params):
+    """[검증하기]를 누른 때의 설정만 결과에 쓴다. 설정을 바꾸는 중에는 다시 계산하지 않는다."""
+    if submitted:
+        st.session_state[key] = params
+    if key not in st.session_state:
+        st.info("왼쪽에서 설정을 고른 뒤 **[검증하기]** 버튼을 누르세요.")
+        st.stop()
+    if st.session_state[key] != params:
+        st.caption("⚠️ 왼쪽 설정이 바뀌었습니다. 아래는 이전 설정의 결과이니 **[검증하기]**를 다시 누르세요.")
+    return st.session_state[key]
+
+
 def single():
     with st.sidebar:
         st.header("종목")
         ticker = pick("이름 또는 코드로 검색", "one", "MSFT")
-        st.header("규칙")
-        rules = st.multiselect("지표 (여러 개 고르면 조합)", engine.RULES, ["200일선"])
-        mode = "다수결"
-        if len(rules) > 1:
-            mode = st.radio("조합 방식", ["다수결", "전부"], horizontal=True,
-                            help="다수결: 고른 지표의 과반수가 '보유'면 보유 / 전부: 모두 '보유'일 때만 보유")
-        rule_help()
-        start, split, end, cost = periods_ui(is_coin(ticker), ticker)
+        with st.form("one_form"):
+            st.header("규칙")
+            rules = st.multiselect("지표 (여러 개 고르면 조합)", engine.RULES, ["200일선"])
+            mode = mode_radio()
+            rule_help()
+            start, split, end, cost = periods_ui(is_coin(ticker), ticker)
+            go_ = st.form_submit_button("검증하기", type="primary")
+    ticker, rules, mode, start, split, end, cost = run_with(
+        "one_params", go_, (ticker, rules, mode, start, split, end, cost))
 
     if not ticker or not rules:
         st.warning("종목과 지표를 하나 이상 고르세요.")
@@ -195,10 +213,11 @@ def single():
 
     label = " + ".join(rules) + (f" ({mode})" if len(rules) > 1 else "")
     hold_name = f"그냥 들고 있기: {ticker}"
-    rows, verdicts = [], {}
+    rows, verdicts, stats = [], {}, {}
     for pname, (a, b) in periods.items():
         m_rule, m_hold = engine.metrics(ret.loc[a:b]), engine.metrics(engine.hold_returns(oo, a, b, cost))
         verdicts[pname] = engine.passes(m_rule, m_hold)
+        stats[pname] = m_rule, m_hold
         rows.append([pname, "전략", *m_rule, int(entries.loc[a:b].sum())])
         rows.append([pname, hold_name, *m_hold, 1])
         if bench_ticker != ticker and len(bench_oo.loc[a:b]):
@@ -210,6 +229,52 @@ def single():
     if bench_ticker != ticker:
         curves[f"비교 기준: {bench_name}"] = engine.hold_returns(bench_oo, start, end, cost)
     show_chart({k: (1 + r).cumprod() for k, r in curves.items()}, split)
+
+    def lines(pname, a, b):
+        (_, cagr, mdd), (_, h_cagr, h_mdd) = stats[pname]
+        x = engine.diagnose(d, rules, mode, cost, a, b)
+        drag = x["cagr0"] - cagr
+        if cagr < h_cagr and x["cagr0"] >= h_cagr:
+            key = "비용만 없었다면 들고 있기를 이겼습니다 → **탈락의 주원인은 잦은 매매 비용**입니다."
+        elif cagr < h_cagr and x["out_move"] > 0:
+            key = "쉬는 동안 종목이 올랐습니다 → **주원인은 놓친 상승**입니다."
+        elif cagr < h_cagr:
+            key = "쉬는 동안엔 하락을 피했지만 보유 중 수익이 더 나빴습니다 → **주원인은 사고판 타이밍**입니다."
+        elif abs(mdd) < abs(h_mdd):
+            key = "들고 있기보다 덜 잃었습니다 → **주원인은 하락장 방어**입니다."
+        else:
+            key = "보유한 기간의 수익이 들고 있기보다 좋았습니다."
+        out = [f"들고 있기보다 CAGR이 연 {pp(cagr - h_cagr)}. {key}",
+               f"**거래 비용**: 비용이 없었다면 CAGR {pct(x['cagr0'])} → 실제 {pct(cagr)}. "
+               f"매매 {x['trades']}번, 평균 {x['avg_days']:.0f}일 보유해 비용으로 연 {abs(drag) * 100:.1f}%p를 잃었습니다."]
+        if x["held"] < 0.999:
+            out.append(f"**쉬는 동안**: 기간의 {pct(1 - x['held'])}는 보유하지 않았고, 그동안 {ticker}는 "
+                       + (f"+{pct(x['out_move'])} 올라 **상승을 놓쳤습니다**." if x["out_move"] > 0
+                          else f"{pct(x['out_move'])} 내려 **하락을 피했습니다**."))
+        out.append(f"**하락 방어**: 최대 낙폭 {pct(mdd)} vs 들고 있기 {pct(h_mdd)} → "
+                   + ("덜 떨어졌습니다." if abs(mdd) < abs(h_mdd) else "오히려 더 떨어졌습니다."))
+        if x["trades"]:
+            out.append(f"**매매 성적**: {x['trades']}번 중 {pct(x['losing'])}가 손해 본 매매였습니다."
+                       + (" 짧게 사고팔다 손해 보는 **헛매매(휩쏘)**가 많았습니다." if x["avg_days"] < 20 and x["losing"] > 0.5 else ""))
+        return out
+
+    explain(periods, verdicts, lines)
+
+
+def pp(v):
+    """CAGR 차이를 '+1.2%p 높았습니다'처럼."""
+    return f"{abs(v) * 100:.1f}%p " + ("높았습니다" if v >= 0 else "낮았습니다")
+
+
+def explain(periods, verdicts, lines):
+    """'왜 이런 결과가 나왔나' 칸. lines(구간 이름, 시작, 끝) → 문장 목록. 원인 설명만, 투자 조언은 하지 않는다."""
+    st.subheader("🔍 왜 이런 결과가 나왔나")
+    if len(set(verdicts.values())) > 1:
+        ok = [k for k, v in verdicts.items() if v][0]
+        st.markdown(f"⚠️ **구간마다 결과가 다릅니다**: {ok} 구간만 통과했습니다. 시기를 타는 결과라 믿기 어렵습니다.")
+    for col, (pname, (a, b)) in zip(st.columns(len(periods)), periods.items()):
+        col.markdown(f"**{pname} 구간**\n" + "\n".join(f"- {s}" for s in lines(pname, a, b)))
+    st.caption("숫자로 계산한 원인 설명이며, 어떤 전략을 쓰라는 권유가 아닙니다.")
 
 
 def add_candidates(codes):
@@ -227,17 +292,20 @@ def portfolio():
         st.button("한꺼번에 추가", on_click=add_candidates,
                   args=([c.strip().upper() for c in bulk.split(",")],), disabled=not bulk)
         cands = st.multiselect(f"후보 (최대 {MAX_CANDIDATES}개, ×로 빼기)", st.session_state.cands, key="cands")
-        st.header("규칙")
-        choices = [r for r in engine.RULES if r != engine.VB]  # 변동성돌파는 하루짜리 매매라 칸 방식과 안 맞는다
-        rules = st.multiselect("지표 (여러 개 고르면 조합)", choices, ["200일선", "MACD", "RSI"])
-        mode = st.radio("조합 방식", ["다수결", "전부"], horizontal=True,
-                        help="다수결: 고른 지표의 과반수가 '보유'면 보유 / 전부: 모두 '보유'일 때만 보유")
-        rule_help()
-        st.header("칸 나누기")
-        slots = st.number_input("칸 수 (한 칸 = 총자산 ÷ 칸 수)", 1, MAX_CANDIDATES, 10)
-        weekly = st.radio("사고파는 날", ["매일", "주 1회 (주 첫 거래일)"], horizontal=True) != "매일"
-        coin = bool(cands) and is_coin(cands[0])
-        start, split, end, cost = periods_ui(coin, "coin" if coin else "stock")
+        with st.form("many_form"):
+            st.header("규칙")
+            choices = [r for r in engine.RULES if r != engine.VB]  # 변동성돌파는 하루짜리 매매라 칸 방식과 안 맞는다
+            rules = st.multiselect("지표 (여러 개 고르면 조합)", choices, ["200일선", "MACD", "RSI"])
+            mode = mode_radio()
+            rule_help()
+            st.header("칸 나누기")
+            slots = st.number_input("칸 수 (한 칸 = 총자산 ÷ 칸 수)", 1, MAX_CANDIDATES, 10)
+            weekly = st.radio("사고파는 날", ["매일", "주 1회 (주 첫 거래일)"], horizontal=True) != "매일"
+            coin = bool(cands) and is_coin(cands[0])
+            start, split, end, cost = periods_ui(coin, "coin" if coin else "stock")
+            go_ = st.form_submit_button("검증하기", type="primary")
+    cands, rules, mode, slots, weekly, start, split, end, cost = run_with(
+        "many_params", go_, (list(cands), rules, mode, slots, weekly, start, split, end, cost))
 
     if len(cands) < 2 or not rules:
         st.info("왼쪽에서 후보 종목을 2개 이상 넣고 지표를 고르세요. 이름으로 검색해 하나씩 넣거나, 코드를 쉼표로 한꺼번에 넣을 수 있습니다.")
@@ -265,11 +333,13 @@ def portfolio():
 
     label = " + ".join(rules) + f" ({mode}, {slots}칸, {'주 1회' if weekly else '매일'})"
     bench_label = f"비교 기준: {bench_name}"
-    rows, verdicts = [], {}
+    grow = lambda s, a, b: engine.metrics(s.loc[a:b].pct_change().dropna())
+    rows, verdicts, stats = [], {}, {}
     for pname, (a, b) in periods.items():
-        m_rule = engine.metrics(eq.loc[a:b].pct_change().dropna())
+        m_rule = grow(eq, a, b)
         m_bench = engine.metrics(engine.hold_returns(bench_oo, a, b, cost))
         verdicts[pname] = engine.passes(m_rule, m_bench)
+        stats[pname] = m_rule, m_bench, (grow(equal, a, b) if equal is not None else None)
         rows.append([pname, "전략", *m_rule, int(buys.loc[a:b].sum()), f"{held.loc[a:b].mean():.1f}"])
         rows.append([pname, bench_label, *m_bench, 1, ""])
         if equal is not None:
@@ -290,6 +360,34 @@ def portfolio():
     st.caption("방식: 돈을 칸 수만큼 나눠, 그날 종가 기준 조건을 충족한 후보를 다음 시가에 RSI 낮은 순으로 빈 칸에 삽니다. "
                "조건이 풀리면 팝니다. 빈 칸의 돈은 비교 기준 지수에 넣어 두고, 종목을 살 때 지수를 팔아 마련합니다"
                "(사고팔 때마다 비용). 비중 재조정은 하지 않습니다.")
+
+    eq0 = engine.simulate(opn, rsi, cond, bench["Open"].loc[:end], slots, 0.0, weekly, start)[0]
+
+    def lines(pname, a, b):
+        (_, cagr, mdd), (_, b_cagr, b_mdd), m_eq = stats[pname]
+        cagr0, n, bought = grow(eq0, a, b)[1], held.loc[a:b].mean(), int(buys.loc[a:b].sum())
+        days = held.loc[a:b].sum() / bought if bought else 0
+        if cagr < b_cagr and cagr0 >= b_cagr:
+            key = "비용만 없었다면 지수를 이겼습니다 → **탈락의 주원인은 잦은 매매 비용**입니다."
+        elif m_eq is not None and m_eq[1] > b_cagr and cagr < m_eq[1]:
+            key = "후보 종목들은 지수보다 좋았는데 전략은 그걸 다 못 따라갔습니다 → **규칙대로 사고판 게 손해**였습니다."
+        elif cagr < b_cagr:
+            key = "후보 종목 자체도, 규칙도 지수를 넘지 못했습니다."
+        else:
+            key = "지수보다 나았습니다. 후보를 '지금 아는 종목'으로 골랐다면 생존 편향 때문일 수 있습니다."
+        out = [f"지수보다 CAGR이 연 {pp(cagr - b_cagr)}. {key}",
+               f"**거래 비용**: 비용이 없었다면 CAGR {pct(cagr0)} → 실제 {pct(cagr)}. 매수 {bought}번, 한 종목을 평균 "
+               f"{days:.0f}거래일 들고 있어 비용으로 연 {abs(cagr0 - cagr) * 100:.1f}%p를 잃었습니다.",
+               f"**칸 활용**: {slots}칸 중 평균 {n:.1f}칸만 찼습니다 → 자산의 약 {pct(1 - n / slots)}는 지수에 있었습니다"
+               + (" (그래서 결과가 지수와 비슷해집니다)." if n / slots < 0.5 else ".")]
+        if m_eq is not None:
+            out.append(f"**종목 고르기 효과**: 후보를 똑같이 나눠 들고만 있었어도 지수보다 연 {pp(m_eq[1] - b_cagr)}.")
+            out.append(f"**규칙 효과**: 같은 후보로 규칙대로 사고판 결과는 그냥 들고 있기보다 연 {pp(cagr - m_eq[1])}.")
+        out.append(f"**하락 방어**: 최대 낙폭 {pct(mdd)} vs 지수 {pct(b_mdd)} → "
+                   + ("덜 떨어졌습니다." if abs(mdd) < abs(b_mdd) else "오히려 더 떨어졌습니다."))
+        return out
+
+    explain(periods, verdicts, lines)
 
 
 st.title("📊 전략 검증기")
